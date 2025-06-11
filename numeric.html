@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Numeric Waves</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="title-container">
+    <div class="overlay">
+        <div class="overlay-text"><a href="index.html">Particle Waves</a></div>
+    </div>
+    <div class="overlay page">
+        <div class="overlay-text">Numeric Waves</div>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-width/2, width/2, height/2, -height/2, 0.1, 10);
+    camera.position.z = 1;
+
+    const renderer = new THREE.WebGLRenderer({antialias: true});
+    renderer.setSize(width, height);
+    document.body.appendChild(renderer.domElement);
+
+    const gridSize = 70;
+    const cols = Math.ceil(width / gridSize);
+    const rows = Math.ceil(height / gridSize);
+
+    // スプライト作成用ヘルパー
+    function createTextSprite(text, color="#FFFFFF") {
+      const canvas = document.createElement('canvas');
+      const size = 180;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+
+      ctx.clearRect(0, 0, size, size);
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 64px Arial';
+      ctx.fillText(text, size / 2, size / 2);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;  // 高品質表示のため追加
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      return { sprite: new THREE.Sprite(material), canvas, ctx };
+    }
+
+    const cells = [];
+    const squares = [];
+
+    // 粗いグリッド＋数字スプライト作成
+    for (let i = -cols/2; i < cols/2; i++) {
+      for (let j = -rows/2; j < rows/2; j++) {
+        const x = i * gridSize + gridSize/2;
+        const y = j * gridSize + gridSize/2;
+
+        const dist = Math.sqrt(x*x + y*y);
+
+        // 色決定（中心円は黒で塗りつぶし。細かいグリッドを上に乗せるため）
+        const color = 0xFFFFFF;
+
+        const geo = new THREE.PlaneGeometry(gridSize, gridSize);
+        const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0 });
+        const square = new THREE.Mesh(geo, mat);
+        square.position.set(x, y, 0);
+        scene.add(square);
+
+        squares.push(square)
+
+        // 数字スプライト（粗いグリッド用）
+        const {sprite, canvas, ctx} = createTextSprite("0");
+        sprite.position.set(x, y, 0.1);
+        sprite.scale.set(gridSize, gridSize, 1);
+        scene.add(sprite);
+
+        cells.push({ x, y, sprite, canvas, ctx });
+      }
+    }
+
+    // 中心円の細かいグリッド部分（色のみ）
+    const fineGridSize = 5;
+    const radius = 270;
+    const fineCols = Math.ceil((radius * 2) / fineGridSize);
+    const fineRows = Math.ceil((radius * 2) / fineGridSize);
+
+    // hash関数（GLSL風）
+    function hash(p) {
+        return fract(Math.sin(p.x * 12.9898 + p.y * 78.233) * 43758.5453);
+    }
+    function fract(x) { return x - Math.floor(x); }
+
+    for (let i = -fineCols/2; i < fineCols/2; i++) {
+        for (let j = -fineRows/2; j < fineRows/2; j++) {
+            const x = i * fineGridSize + fineGridSize/2;
+            const y = j * fineGridSize + fineGridSize/2;
+
+            if (Math.sqrt(x*x + y*y) > radius) continue;
+
+            // UV相当を計算（0〜1の範囲に正規化）
+            const u = (i + fineCols/2) / fineCols;
+            const v = (j + fineRows/2) / fineRows;
+
+            // floor(vUv * 15.0)の整数ベクトル
+            const p = {x: Math.floor(u * 7), y: Math.floor(v * 7)};
+            const n = hash(p);
+
+            let color;
+            if (n < 0.5) {
+                color = new THREE.Color(20/255, 70/255, 160/255);
+            } else {
+                color = new THREE.Color(60/255, 180/255, 30/255);
+            }
+
+
+            const geo = new THREE.PlaneGeometry(fineGridSize, fineGridSize);
+            const mat = new THREE.MeshBasicMaterial({ color });
+            const square = new THREE.Mesh(geo, mat);
+            square.position.set(x, y, 0.1);
+            scene.add(square);
+        }
+    }
+
+    // 波源管理
+    const waveSources = [];
+    let startTime = performance.now() / 1000;
+
+    // 波源追加タイミング制御用
+    let firstWaveAdded = false;
+
+    function addWaveSource() {
+        waveSources.push({
+            x: (Math.random() - 0.5) * width,
+            y: (Math.random() - 0.5) * height,
+            amplitude: Math.random() * 50 + 50,
+            wavelength: Math.random() * 100 + 50,
+            speed: Math.random() * 0.1 + 0.05,
+            startTime: performance.now() / 1000
+        });
+        if (waveSources.length > 10) waveSources.shift();
+    }
+
+    // 最初の波源をすぐ追加しない（2秒後に追加）
+    setInterval(() => {
+        const currentTime = performance.now() / 1000;
+        if (!firstWaveAdded && currentTime - startTime > 1) {
+            addWaveSource();
+            firstWaveAdded = true;
+        } else if (firstWaveAdded) {
+            addWaveSource();  // その後は1秒ごとに追加してもよい
+        }
+    }, 2000);
+
+
+    // アニメーションループ
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = performance.now() / 1000;
+
+        for (let i = 0; i < cells.length; i++) {
+            const cell = cells[i]
+            let total = 0;
+            for (let s of waveSources) {
+                const dx = cell.x - s.x;
+                const dy = cell.y - s.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                const elapsed = time - s.startTime;
+                const phase = (dist / s.wavelength - elapsed * s.speed) * 2 * Math.PI;
+                const decay = Math.exp(-elapsed / 10) / (1 + dist * 0.01);
+                total += s.amplitude * decay * Math.sin(phase);
+            }
+            total = Math.round(Math.max(-99, Math.min(99, total)));
+
+            // スプライトのテクスチャ更新
+            const ctx = cell.ctx;
+            const canvas = cell.canvas;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#FFF";
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = 'bold 64px Arial';
+            ctx.fillText(total.toString(), canvas.width / 2, canvas.height / 2);
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.minFilter = THREE.LinearFilter; // 滑らかに表示
+            cell.sprite.material.map.dispose();
+            cell.sprite.material.map = texture;
+            cell.sprite.material.needsUpdate = true;
+
+
+            // 透明度の設定 (-99 -> 0, 99 -> 1)
+            const alpha = (total + 99) / 198;
+            squares[i].material.opacity = alpha;
+            squares[i].material.transparent = true;
+            squares[i].material.needsUpdate = true;
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // リサイズ対応
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      renderer.setSize(w, h);
+      camera.left = -w/2;
+      camera.right = w/2;
+      camera.top = h/2;
+      camera.bottom = -h/2;
+      camera.updateProjectionMatrix();
+    });
+  </script>
+</body>
+</html>
