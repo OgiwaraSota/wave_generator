@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Infinite Wave Simulation (GPU, Three.js r160)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: black; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="module">
+        import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.Camera(); // 2Dで見下ろしなのでパースなし
+
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(width, height);
+        document.body.appendChild(renderer.domElement);
+
+        // グリッド数（例: 100 x 100）
+        const gridSize = 100;
+        const count = gridSize * gridSize;
+
+        const positions = new Float32Array(count * 3);
+        const uv = new Float32Array(count * 2);
+
+        // 画面いっぱいに正規化座標で粒子を配置 (0~1)
+        for(let y = 0; y < gridSize; y++) {
+        for(let x = 0; x < gridSize; x++) {
+            const i = x + y * gridSize;
+            positions[i * 3] = (x / (gridSize - 1)) * 2 - 1;   // -1 〜 +1のNDC座標に変換
+            positions[i * 3 + 1] = (y / (gridSize - 1)) * 2 - 1;
+            positions[i * 3 + 2] = 0;
+
+            uv[i * 2] = x / (gridSize - 1);
+            uv[i * 2 + 1] = y / (gridSize - 1);
+        }
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+
+        const MAX_SOURCES = 100;
+        let sources = [];
+
+        // 省略：波源生成関数は先程と同様
+
+        const uniforms = {
+        time: { value: 0 },
+        resolution: { value: new THREE.Vector2(width, height) },
+        sourceCount: { value: 0 },
+        sources: { value: new Array(MAX_SOURCES).fill(new THREE.Vector4(0,0,0,0)) },
+        startTimes: { value: new Array(MAX_SOURCES).fill(0) },
+        speeds: { value: new Float32Array(MAX_SOURCES) },
+        };
+
+        const vertexShader = `
+        precision highp float;
+
+        uniform float time;
+        uniform float speeds[100];  // 波源ごとの速度配列
+        uniform vec2 resolution;
+        uniform int sourceCount;
+        uniform vec4 sources[100];      // x,y = 位置, z=振幅, w=波長
+        uniform float startTimes[100];
+
+        varying float vAmplitude;
+        varying vec2 vUv;
+
+        void main() {
+            vUv = uv;
+            float aspect = resolution.x / resolution.y;
+
+            vec2 p = vec2(vUv.x * aspect, vUv.y);
+            float total = 0.0;
+
+            for (int i = 0; i < 100; i++) {
+                if (i >= sourceCount) break;
+
+                vec4 s = sources[i];
+                vec2 spos = vec2(s.x * aspect, s.y);
+                float amplitude = s.z;
+                float wavelength = s.w;
+                float speed = speeds[i];
+                float elapsed = time - startTimes[i];
+
+                if (elapsed > 60.0 || elapsed < 0.0) continue;
+
+                float dist = distance(p, spos);
+                float rMax = speed * elapsed;
+
+                if (dist > rMax) continue;
+
+                float phase = 6.28318 * (dist / wavelength - speed * elapsed / wavelength);
+                float decay = exp(-elapsed / 10.0) / (1.0 + dist * 50.0);
+
+                total += amplitude * decay * sin(phase);
+            }
+
+            total = clamp(total, -1.0, 1.0);
+
+            float maxAmplitude = 0.5;
+            if (total > maxAmplitude) total = maxAmplitude;
+            else if (total < -maxAmplitude) total = -maxAmplitude;
+
+            vAmplitude = total;
+
+            vec4 mvPosition = vec4(position, 1.0);
+            gl_Position = mvPosition;
+
+            gl_PointSize = 5.0 + 5.0 * vAmplitude;
+            }
+        `;
+
+        const fragmentShader = `
+        precision highp float;
+
+        varying float vAmplitude;
+
+        void main() {
+            // gl_PointCoord は粒子内の0〜1の座標
+            vec2 coord = gl_PointCoord - vec2(0.5);
+            float dist = length(coord);
+
+            // 円形マスク：半径0.5以内は描画、それ以外は透明にする
+            if (dist > 0.5) {
+                discard;  // 半透明（描画しない）
+            }
+
+            // 白色の粒子（振幅で明るさ変えてもよい）
+            float brightness = 1.0;  // 振幅連動なら abs(vAmplitude) を掛けるなど
+            gl_FragColor = vec4(vec3(brightness), 1.0);
+        }
+
+        `;
+
+        const material = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader,
+        fragmentShader,
+        transparent: true,
+        depthTest: false
+        });
+
+        const points = new THREE.Points(geometry, material);
+        scene.add(points);
+
+        function addSource() {
+        if(sources.length >= MAX_SOURCES) sources.shift();
+        sources.push({
+            sx: Math.random(),
+            sy: Math.random(),
+            amplitude: Math.random() * 10 + 1,
+            wavelength: Math.random() * 0.2 + 0.05,
+            speed: Math.random() * (0.1 - 0.01) + 0.05,
+            startTime: performance.now() / 1000,
+            duration: 10.0
+        });
+        }
+
+        setInterval(addSource, 1000);
+
+        function animate() {
+        requestAnimationFrame(animate);
+        uniforms.time.value = performance.now() / 1000;
+        uniforms.sourceCount.value = sources.length;
+        for(let i=0; i<sources.length; i++) {
+            const s = sources[i];
+            uniforms.sources.value[i] = new THREE.Vector4(s.sx, s.sy, s.amplitude, s.wavelength);
+            uniforms.startTimes.value[i] = s.startTime;
+            uniforms.speeds.value[i] = s.speed;
+        }
+        renderer.render(scene, camera);
+        }
+        animate();
+
+    </script>
+</body>
+</html>
