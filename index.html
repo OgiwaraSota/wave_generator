@@ -2,13 +2,13 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Infinite Wave Simulation (GPU, Three.js r160)</title>
-    <style>
-        body { margin: 0; overflow: hidden; background: black; }
-        canvas { display: block; }
-    </style>
+    <title>Psrticle Waves</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div class="overlay">
+        <div class="overlay-text">Particle Waves</div>
+    </div>
     <script type="module">
         import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 
@@ -64,24 +64,25 @@
         precision highp float;
 
         uniform float time;
-        uniform float speeds[100];  // 波源ごとの速度配列
+        uniform float speeds[100];
         uniform vec2 resolution;
         uniform int sourceCount;
-        uniform vec4 sources[100];      // x,y = 位置, z=振幅, w=波長
+        uniform vec4 sources[100];
         uniform float startTimes[100];
 
         varying float vAmplitude;
         varying vec2 vUv;
 
         void main() {
-            vUv = uv;
-            float aspect = resolution.x / resolution.y;
+            vUv = uv; // ここだけでOK
 
+            float aspect = resolution.x / resolution.y;
             vec2 p = vec2(vUv.x * aspect, vUv.y);
+
             float total = 0.0;
 
-            for (int i = 0; i < 100; i++) {
-                if (i >= sourceCount) break;
+            for(int i = 0; i < 100; i++) {
+                if(i >= sourceCount) break;
 
                 vec4 s = sources[i];
                 vec2 spos = vec2(s.x * aspect, s.y);
@@ -90,12 +91,12 @@
                 float speed = speeds[i];
                 float elapsed = time - startTimes[i];
 
-                if (elapsed > 60.0 || elapsed < 0.0) continue;
+                if(elapsed < 0.0 || elapsed > 60.0) continue;
 
                 float dist = distance(p, spos);
                 float rMax = speed * elapsed;
 
-                if (dist > rMax) continue;
+                if(dist > rMax) continue;
 
                 float phase = 6.28318 * (dist / wavelength - speed * elapsed / wavelength);
                 float decay = exp(-elapsed / 10.0) / (1.0 + dist * 50.0);
@@ -106,37 +107,61 @@
             total = clamp(total, -1.0, 1.0);
 
             float maxAmplitude = 0.5;
-            if (total > maxAmplitude) total = maxAmplitude;
-            else if (total < -maxAmplitude) total = -maxAmplitude;
+            if(total > maxAmplitude) total = maxAmplitude;
+            else if(total < -maxAmplitude) total = -maxAmplitude;
 
             vAmplitude = total;
 
             vec4 mvPosition = vec4(position, 1.0);
             gl_Position = mvPosition;
 
-            gl_PointSize = 5.0 + 5.0 * vAmplitude;
-            }
+            gl_PointSize = 7.0 + 7.0 * vAmplitude;
+        }
+
         `;
 
         const fragmentShader = `
-        precision highp float;
+            precision highp float;
 
-        varying float vAmplitude;
+            varying vec2 vUv;
+            uniform vec2 resolution;
 
-        void main() {
-            // gl_PointCoord は粒子内の0〜1の座標
-            vec2 coord = gl_PointCoord - vec2(0.5);
-            float dist = length(coord);
-
-            // 円形マスク：半径0.5以内は描画、それ以外は透明にする
-            if (dist > 0.5) {
-                discard;  // 半透明（描画しない）
+            float hash(vec2 p) {
+                return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453);
             }
 
-            // 白色の粒子（振幅で明るさ変えてもよい）
-            float brightness = 1.0;  // 振幅連動なら abs(vAmplitude) を掛けるなど
-            gl_FragColor = vec4(vec3(brightness), 1.0);
-        }
+            void main() {
+                // 楕円補正のためYをアスペクト比でスケーリング
+                float aspect = resolution.x / resolution.y;
+                vec2 center = vec2(0.5, 0.5);
+
+                // Y方向に1/aspectで補正して、波の距離計算と合わせる
+                vec2 uv_corrected = vec2(vUv.x, (vUv.y - center.y) / aspect + center.y);
+
+                float dist = distance(uv_corrected, center);
+                float radius = 0.2;
+                vec3 color;
+
+                // 中央円内は青緑ノイズ、外は白
+                if(dist < radius) {
+                    // ノイズで色を青 or 緑にランダムに分ける
+                    float n = hash(floor(vUv * 15.0));
+                    if(n < 0.5) {
+                        color = vec3(70.0/255.0, 150.0/255.0, 230.0/255.0); // 青
+                    } else {
+                        color = vec3(80.0/255.0, 200.0/255.0, 80.0/255.0);   // 緑
+                    }
+                } else {
+                    color = vec3(1.0); // 外側は白
+                }
+
+                // 粒子を丸く描画（半径0.5の円形マスク）
+                vec2 coord = gl_PointCoord - vec2(0.5);
+                float pointDist = length(coord);
+                if(pointDist > 0.5) discard;
+
+                gl_FragColor = vec4(color, 1.0);
+            }
 
         `;
 
