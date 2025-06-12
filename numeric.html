@@ -148,7 +148,7 @@
         if (waveSources.length > 10) waveSources.shift();
     }
 
-    // 最初の波源をすぐ追加しない（2秒後に追加）
+    // 最初の波源
     setInterval(() => {
         const currentTime = performance.now() / 1000;
         if (!firstWaveAdded && currentTime - startTime > 1) {
@@ -157,7 +157,7 @@
         } else if (firstWaveAdded) {
             addWaveSource();  // その後は1秒ごとに追加してもよい
         }
-    }, 2000);
+    }, 5000);
 
 
     // アニメーションループ
